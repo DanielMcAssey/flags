@@ -381,11 +381,21 @@ async function downloadFlag({
 async function downloadCountryFlags(attribution) {
   console.log("\nFetching country flags...\n");
 
+  // p:P297/ps:P297 instead of wdt:P297 to include deprecated-rank ISO codes.
+  // Needed for e.g. SADR (Q40362), which holds the EH flag but whose P297="EH"
+  // is marked deprecated because the territory item Q6250 is the primary EH entry.
+  // Because deprecated P297 codes are now included, we must also filter out
+  // dissolved / historical countries (Yugoslavia, USSR, etc.) whose codes were
+  // previously suppressed by the wdt: truthy-rank shorthand.
   const sparql = `
 SELECT DISTINCT ?country ?countryLabel ?iso2 ?flag WHERE {
   ?country wdt:P31/wdt:P279* wd:Q6256;
-           wdt:P297 ?iso2;
+           p:P297/ps:P297 ?iso2;
            wdt:P41 ?flag.
+
+  FILTER NOT EXISTS { ?country wdt:P576 ?dissolved. }
+  FILTER NOT EXISTS { ?country wdt:P582 ?endTime. }
+  MINUS { ?country wdt:P31/wdt:P279* wd:Q3024240. }  # historical country
 
   SERVICE wikibase:label {
     bd:serviceParam wikibase:language "en".
@@ -446,28 +456,24 @@ ORDER BY ?iso2
 async function downloadTerritoryFlags(attribution) {
   console.log("\nFetching dependent / overseas territory flags...\n");
 
-  // Dependent territories, overseas territories, crown dependencies and similar
-  // entities carry an ISO 3166-1 alpha-2 code (P297) but are typically NOT
-  // classed as a sovereign country (Q6256), so the country pass misses them.
-  // We target the relevant territory classes explicitly.
+  // Catch all entities that hold an ISO 3166-1 alpha-2 code (P297) and a flag
+  // (P41) but are NOT sovereign countries (Q6256) — those are already handled
+  // by the country pass. A type whitelist was previously used here but it
+  // silently missed entities whose Wikidata classification fell outside the
+  // list (e.g. AX Åland Islands, EH Western Sahara, BQ Caribbean Netherlands).
+  // The catch-all approach is both simpler and complete by construction.
+  // p:P41/ps:P41 instead of wdt:P41 to include deprecated-rank flag images.
+  // Needed for e.g. BQ (Caribbean Netherlands, Q27561), which has a flag but
+  // it is marked deprecated in Wikidata, so the standard wdt: shorthand skips it.
   const sparql = `
 SELECT DISTINCT ?territory ?territoryLabel ?iso2 ?flag WHERE {
-  VALUES ?territoryType {
-    wd:Q161243    # dependent territory
-    wd:Q46395     # British Overseas Territory
-    wd:Q185086    # Crown dependency
-    wd:Q1773257   # overseas department of France
-    wd:Q202216    # overseas collectivity of France
-    wd:Q719487    # overseas territory
-    wd:Q15634554  # state with limited recognition
-    wd:Q1763527   # constituent country
-  }
+  ?territory wdt:P297 ?iso2;
+             p:P41/ps:P41 ?flag.
 
-  ?territory wdt:P31/wdt:P279* ?territoryType;
-             wdt:P297 ?iso2;
-             wdt:P41 ?flag.
+  # Sovereign countries are already covered by the country pass.
+  FILTER NOT EXISTS { ?territory wdt:P31/wdt:P279* wd:Q6256. }
 
-  # Exclude territories that no longer exist (dissolved / abolished / ended).
+  # Exclude entities that no longer exist (dissolved / abolished / ended).
   FILTER NOT EXISTS { ?territory wdt:P576 ?dissolved. }
   FILTER NOT EXISTS { ?territory wdt:P582 ?endTime. }
   MINUS { ?territory wdt:P31/wdt:P279* wd:Q3024240. }  # historical country
