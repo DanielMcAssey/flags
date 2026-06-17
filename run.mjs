@@ -501,11 +501,30 @@ async function downloadCountryFlags(attribution) {
   // Because deprecated P297 codes are now included, we must also filter out
   // dissolved / historical countries (Yugoslavia, USSR, etc.) whose codes were
   // previously suppressed by the wdt: truthy-rank shorthand.
+  //
+  // Flags are grouped per country so selection is deterministic. A few countries
+  // carry more than one best-rank flag (e.g. MZ Mozambique, whose historical
+  // variants are mis-ranked in Wikidata). We prefer a flag whose P41 statement
+  // has NO end-time qualifier (P582) — i.e. the current one — but fall back to
+  // any best-rank flag, because Wikidata also pins P582 on some countries'
+  // *current* flag to record a shade/spec change (FR, RU, AT, AF, ...); excluding
+  // those outright would drop the country entirely.
   const sparql = `
-SELECT DISTINCT ?country ?countryLabel ?iso2 ?flag WHERE {
+SELECT ?iso2
+       (SAMPLE(?country) AS ?item)
+       (SAMPLE(?countryLabel) AS ?label)
+       (GROUP_CONCAT(DISTINCT ?currentFlag; separator="|") AS ?currentFlags)
+       (GROUP_CONCAT(DISTINCT STR(?flag); separator="|") AS ?allFlags) WHERE {
   ?country wdt:P31/wdt:P279* wd:Q6256;
            p:P297/ps:P297 ?iso2;
            wdt:P41 ?flag.
+
+  OPTIONAL {
+    ?country p:P41 ?flagStatement.
+    ?flagStatement ps:P41 ?flag.
+    ?flagStatement pq:P582 ?flagEnd.
+  }
+  BIND(IF(BOUND(?flagEnd), "", STR(?flag)) AS ?currentFlag)
 
   FILTER NOT EXISTS { ?country wdt:P576 ?dissolved. }
   FILTER NOT EXISTS { ?country wdt:P582 ?endTime. }
@@ -515,26 +534,41 @@ SELECT DISTINCT ?country ?countryLabel ?iso2 ?flag WHERE {
     bd:serviceParam wikibase:language "en".
   }
 }
+GROUP BY ?iso2
 ORDER BY ?iso2
 `;
 
   const rows = await wikidataQuery(sparql);
 
-  console.log(`Found ${rows.length} country flag rows.`);
+  console.log(`Found ${rows.length} country rows.`);
 
   let downloaded = 0;
   let failed = 0;
 
   for (const row of rows) {
     const iso2 = row.iso2?.toLowerCase();
+    const label = row.label;
 
     if (!iso2) {
-      console.log(`Skipping country without ISO2 code: ${row.countryLabel}`);
+      console.log(`Skipping country without ISO2 code: ${label}`);
       continue;
     }
 
     if (WITHDRAWN_ISO2_CODES.has(iso2)) {
-      console.log(`Skipping withdrawn ISO code: ${iso2} (${row.countryLabel})`);
+      console.log(`Skipping withdrawn ISO code: ${iso2} (${label})`);
+      continue;
+    }
+
+    // Prefer the current flag (no end-time qualifier); fall back to any best-rank
+    // flag. Proposed / unofficial designs are never a country's real flag.
+    const isUsable = (flag) => !isProposedOrUnofficialFlag(flag);
+    const currentFlags = splitConcat(row.currentFlags).filter(isUsable);
+    const allFlags = splitConcat(row.allFlags).filter(isUsable);
+
+    const flag = currentFlags.sort()[0] ?? allFlags.sort()[0] ?? null;
+
+    if (!flag) {
+      console.log(`Skipping country without a usable flag: ${label} (${iso2})`);
       continue;
     }
 
@@ -542,13 +576,13 @@ ORDER BY ?iso2
 
     try {
       const didDownload = await downloadFlag({
-        fileUrl: row.flag,
+        fileUrl: flag,
         outputFile,
         attributionKey: iso2,
         attributionBucket: attribution.countries,
         extraAttribution: {
-          wikidataItem: row.country,
-          label: row.countryLabel,
+          wikidataItem: row.item,
+          label,
           iso2
         }
       });
@@ -556,7 +590,7 @@ ORDER BY ?iso2
       if (didDownload) downloaded++;
     } catch (error) {
       failed++;
-      console.error(`Failed country flag: ${row.countryLabel} (${iso2})`);
+      console.error(`Failed country flag: ${label} (${iso2})`);
       console.error(error.message);
     }
 
