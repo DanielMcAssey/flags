@@ -53,6 +53,8 @@ node list-attribution.mjs --json
 
 Each metadata entry records: `wikidataItem`, `label`, `commonsUrl`, `downloadUrl`, `user`, `license`, `licenseUrl`, `usageTerms`, `attributionRequired`, `artist`, `credit`, `attribution`, `localFile`.
 
+Territory entries also carry `usesFlag`: `null` when the territory has its own downloaded flag, or the parent country's ISO code (e.g. `"fr"`) when the territory has no distinct flag and flies its sovereign country's flag instead. A `usesFlag` reference has no own SVG (`localFile` is `null`) and no licensing fields — `list-attribution.mjs` skips these, since attribution (if any) lives on the parent country entry.
+
 ## Key details
 
 - **`USER_AGENT`** near the top of `run.mjs` must be set to your app name and contact email before running the script seriously against the Wikimedia APIs.

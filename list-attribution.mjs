@@ -62,6 +62,11 @@ function collectEntries(bucket, bucketName) {
   for (const [key, value] of Object.entries(bucket || {})) {
     if (!value || typeof value !== "object") continue;
 
+    // A territory that flies its parent country's flag carries no flag/license of
+    // its own — its attribution (if any) lives on the parent country entry, so
+    // skip it here.
+    if (value.usesFlag) continue;
+
     if (value.license !== undefined || value.localFile !== undefined) {
       // A flag record.
       entries.push({ bucket: bucketName, key, entry: value });
